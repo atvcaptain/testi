@@ -1,12 +1,13 @@
 #include <linux/fb.h>
+#include <linux/kd.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <memory.h>
 #include <string.h>
+#include <ctype.h>
 #include <unistd.h>
-#include <linux/kd.h>
 #include <sys/ioctl.h>
 #include <stdarg.h>
 #include "font.h"
@@ -23,11 +24,11 @@ void set_step_progress(int percent);
 void set_step_text(char* str);
 
 #define TRANS "\x00\x00\x00\x00"
-#define BLACK "\x00\x00\x00\x30"
-#define WHITE "\xFF\xFF\xFF\xFF"
-#define RED   "\x00\x00\xFF\xFF"
-#define GREEN "\x00\xFF\x00\xFF"
-#define BLUE  "\xFF\x00\x00\xFF"
+//#define BLACK "\x00\x00\x00\x30"
+//#define WHITE "\xFF\xFF\xFF\xFF"
+//#define RED   "\x00\x00\xFF\xFF"
+//#define GREEN "\x00\xFF\x00\xFF"
+//#define BLUE  "\xFF\x00\x00\xFF"
 
 #define FB_WIDTH 1280
 #define FB_HEIGHT 720
@@ -38,6 +39,14 @@ void set_step_text(char* str);
 #define FBIO_BLIT 0x22
 #endif
 
+struct config {
+    char title[128];
+    int width;
+    int height;
+    unsigned char bg_color[4];
+    unsigned char bar_color[4];
+    unsigned char text_color[4];
+};
 
 int g_fbFd = -1;
 unsigned char *g_lfb = NULL;
@@ -72,7 +81,63 @@ struct progressbar
 };
 
 struct progressbar g_pb_overall;
-struct progressbar g_pb_step;
+struct config cfg;
+
+void parse_hex_color_bgra(const char *hex, unsigned char *bgra) {
+    if (!hex || hex[0] != '#' || strlen(hex) != 9) {
+        bgra[0] = 0xFF; // B
+        bgra[1] = 0xFF; // G
+        bgra[2] = 0xFF; // R
+        bgra[3] = 0xFF; // A
+        return;
+    }
+
+    unsigned int r, g, b, a;
+    sscanf(hex, "#%02x%02x%02x%02x", &r, &g, &b, &a);
+
+    // BGRA
+    bgra[0] = b;
+    bgra[1] = g;
+    bgra[2] = r;
+    bgra[3] = a;
+}
+
+void load_config(const char *path) {
+    FILE *f = fopen(path, "r");
+    if (!f) {
+		memset(&cfg, 0, sizeof(cfg));
+		strcpy(cfg.title, "Fast Restore in Progress");
+		cfg.width = 800;
+		cfg.height = 200;
+		parse_hex_color_bgra("#00000030", cfg.bg_color);
+		parse_hex_color_bgra("#CCCCCCFF", cfg.bar_color);
+		parse_hex_color_bgra("#FFFFFFFF", cfg.text_color);	
+		return;
+    }
+
+    char line[256];
+    while (fgets(line, sizeof(line), f)) {
+        if (line[0] == '#' || line[0] == '\n')
+            continue;
+
+        char key[64], value[128];
+        if (sscanf(line, "%63[^=]=%127[^\n]", key, value) == 2) {
+            if (strcmp(key, "title") == 0)
+                strncpy(cfg.title, value, sizeof(cfg.title));
+            else if (strcmp(key, "width") == 0)
+                cfg.width = atoi(value);
+            else if (strcmp(key, "height") == 0)
+                cfg.height = atoi(value);
+            else if (strcmp(key, "bg_color") == 0)
+				parse_hex_color_bgra(value, cfg.bg_color);
+			else if (strcmp(key, "bar_color") == 0)
+				parse_hex_color_bgra(value, cfg.bar_color);
+			else if (strcmp(key, "text_color") == 0)
+				parse_hex_color_bgra(value, cfg.text_color);
+        }
+    }
+    fclose(f);
+}
 
 
 void blit()
@@ -101,10 +166,10 @@ void disableManualBlit()
 		g_manual_blit = 0;
 }
 
-void set_window_dimension()
+void set_window_dimension(int width, int height)
 {
-	g_window.width = 800;
-	g_window.height = 200;
+	g_window.width = width;
+	g_window.height = height;
 	g_window.x1 = g_screeninfo_var.xres - g_window.width;
 	g_window.y1 = 0;
 	g_window.x2 = g_screeninfo_var.xres;
@@ -119,53 +184,29 @@ void paint_box(int x1, int y1, int x2, int y2, char* color)
 			memcpy(&g_lfb[(x + g_screeninfo_var.xoffset) * 4 + (y + g_screeninfo_var.yoffset) * g_screeninfo_fix.line_length], color, 4);
 }
 
-void init_progressbars(int steps)
+void init_progressbar(int steps)
 {
-	// overall progressbar
-	g_pb_overall.width = g_window.width * 0.8;
-	g_pb_overall.height = g_window.height * 0.1;
-	g_pb_overall.outer_border_width = 10;
-	g_pb_overall.inner_border_width = 5;
-	g_pb_overall.x1 = g_window.x1 + (g_window.width * 0.2 / 2 - g_pb_overall.outer_border_width - g_pb_overall.inner_border_width);
-	g_pb_overall.y1 = g_window.y1 + g_window.height * 0.4;
-	g_pb_overall.x2 = g_window.x2 - (g_window.width * 0.2 / 2 - g_pb_overall.outer_border_width - g_pb_overall.inner_border_width);
-	g_pb_overall.y2 = g_pb_overall.y1 + g_pb_overall.height + 2 * g_pb_overall.outer_border_width + 2* g_pb_overall.inner_border_width;
-	g_pb_overall.steps = steps;
+	g_pb_overall.width = g_window.width - 30;
+	g_pb_overall.height = 20;
+	g_pb_overall.outer_border_width = 2;
+	g_pb_overall.inner_border_width = 1;
 
-	g_pb_step.width = g_window.width * 0.8;
-	g_pb_step.height = 20; //g_window.height * 0.1;
-	g_pb_step.outer_border_width = 2;
-	g_pb_step.inner_border_width = 1;
-	g_pb_step.x1 = g_window.x1 + (g_window.width * 0.2 / 2 - g_pb_step.outer_border_width - g_pb_step.inner_border_width);
-	g_pb_step.y1 = g_window.y1 + 50; // g_window.height * 0.65;
-	g_pb_step.x2 = g_window.x2 - (g_window.width * 0.2 / 2 - g_pb_step.outer_border_width - g_pb_step.inner_border_width);
-	g_pb_step.y2 = g_pb_step.y1 + g_pb_step.height + 2 * g_pb_step.outer_border_width + 2 * g_pb_step.inner_border_width;
+	int borders = + 2 * g_pb_overall.outer_border_width + 2 * g_pb_overall.inner_border_width;
+
+	g_pb_overall.x1 = g_window.x1 + 10;
+	g_pb_overall.y1 = g_window.y1 + 50;
+	g_pb_overall.x2 = g_pb_overall.x1 + g_pb_overall.width + borders;
+	g_pb_overall.y2 = g_pb_overall.y1 + g_pb_overall.height + borders;
 }
 
-void paint_progressbars()
+void paint_progressbar()
 {
-	/*
-	// paint white border around overall progressbar
-	paint_box(g_pb_overall.x1, g_pb_overall.y1, g_pb_overall.x2, g_pb_overall.y2, WHITE);
-
-	// paint black inner box in overall progressbar
+	paint_box(g_pb_overall.x1, g_pb_overall.y1, g_pb_overall.x2, g_pb_overall.y2, cfg.bar_color);
 	paint_box(g_pb_overall.x1 + g_pb_overall.outer_border_width
 			, g_pb_overall.y1 + g_pb_overall.outer_border_width
 			, g_pb_overall.x2 - g_pb_overall.outer_border_width
 			, g_pb_overall.y2 - g_pb_overall.outer_border_width
-			, BLACK);
-
-	*/
-
-	// paint white border around step progressbar
-	paint_box(g_pb_step.x1, g_pb_step.y1, g_pb_step.x2, g_pb_step.y2, WHITE);
-
-	// paint black inner box in overall progressbar
-	paint_box(g_pb_step.x1 + g_pb_step.outer_border_width
-			, g_pb_step.y1 + g_pb_step.outer_border_width
-			, g_pb_step.x2 - g_pb_step.outer_border_width
-			, g_pb_step.y2 - g_pb_step.outer_border_width
-			, BLACK);
+			, cfg.bg_color);
 }
 
 void close_framebuffer()
@@ -296,14 +337,14 @@ void set_step_progress(int percent)
 		percent = 0;
 	if (percent > 100)
 		percent = 100;
-	int x = g_pb_step.x1 + g_pb_step.outer_border_width + g_pb_step.inner_border_width;
-	int y = g_pb_step.y1 + g_pb_step.outer_border_width + g_pb_step.inner_border_width;
+	int x = g_pb_overall.x1 + g_pb_overall.outer_border_width + g_pb_overall.inner_border_width;
+	int y = g_pb_overall.y1 + g_pb_overall.outer_border_width + g_pb_overall.inner_border_width;
 
 	paint_box(x
 			, y
-			, (int)(x + g_pb_step.width / 100.0 * percent)
-			, y + g_pb_step.height
-			, WHITE);
+			, (int)(x + g_pb_overall.width / 100.0 * percent)
+			, y + g_pb_overall.height
+			, cfg.bar_color);
 	blit();
 }
 
@@ -341,6 +382,65 @@ void render_string(char* str, int x, int y, char* color, int thick)
 		render_char(str[i], x + i * (CHAR_WIDTH + CHAR_WIDTH * thick), y, color, thick);
 }
 
+
+void render_string_wrap(char* str, int x, int y, char* color, int thick, int max_width)
+{
+	int cur_x = x;
+	int cur_y = y;
+	int char_width = CHAR_WIDTH + CHAR_WIDTH * thick;
+	int line_height = CHAR_HEIGHT + CHAR_HEIGHT * thick;
+	int len = strlen(str);
+	int i = 0;
+
+	while (i < len)
+	{
+		if (str[i] == '\n')
+		{
+			cur_x = x;
+			cur_y += line_height;
+			i++;
+			continue;
+		}
+
+		int word_start = i;
+
+		while (i < len && !isspace((unsigned char)str[i]) && str[i] != '\n')
+			i++;
+
+		int word_end = i;
+		int word_length = word_end - word_start;
+
+		int word_pixel_width = word_length * char_width;
+
+		if (cur_x + word_pixel_width > x + max_width)
+		{
+			cur_x = x;
+			cur_y += line_height;
+		}
+
+		for (int j = word_start; j < word_end; j++)
+		{
+			render_char(str[j], cur_x, cur_y, color, thick);
+			cur_x += char_width;
+		}
+
+		while (i < len && isspace((unsigned char)str[i]) && str[i] != '\n')
+		{
+			if (cur_x + char_width > x + max_width)
+			{
+				cur_x = x;
+				cur_y += line_height;
+			}
+
+			if (str[i] == ' ')
+				render_char(' ', cur_x, cur_y, color, thick);
+
+			cur_x += char_width;
+			i++;
+		}
+	}
+}
+
 void set_title(char* str)
 {
 	if (g_fbFd == -1)
@@ -351,13 +451,13 @@ void set_title(char* str)
 			, g_window.y1 + 10
 			, g_window.x2
 			, g_window.y1 + 10 + CHAR_HEIGHT
-			, BLACK);
+			, cfg.bg_color);
 
 	// display text
 	render_string(str
 				, g_window.x1 + 10
 				, g_window.y1 + 10
-				, WHITE
+				, cfg.text_color
 				, 0);
 
 	blit();
@@ -370,17 +470,18 @@ void set_step_text(char* str) // DONE
 
 	// hide text
 	paint_box(g_window.x1 + 10
-			, g_window.y1 + 80
+			, g_window.y1 + 90
 			, g_window.x2
-			, g_window.y1 + 80 + CHAR_HEIGHT
-			, BLACK);
+			, g_window.y1 + 90 + CHAR_HEIGHT * 3 // 3 lines
+			, cfg.bg_color);
 
 	// display text
-	render_string(str
+	render_string_wrap(str
 				, g_window.x1 + 10
-				, g_window.y1 + 80
-				, WHITE
-				, 0);
+				, g_window.y1 + 90
+				, cfg.text_color
+				, 0
+				, g_window.width - 20);
 
 	blit();
 }
@@ -413,12 +514,12 @@ int init_framebuffer(int steps)
 		return 0;
 	}
 
-	set_window_dimension();
+	set_window_dimension(cfg.width, cfg.height);
 
 	// hide all old osd content
 	paint_box(0, 0, g_screeninfo_var.xres, g_screeninfo_var.yres, TRANS);
 
-	init_progressbars(steps);
+	init_progressbar(steps);
 
 	return 1;
 }
@@ -429,10 +530,10 @@ int show_main_window()
 	paint_box(0, 0, g_screeninfo_var.xres, g_screeninfo_var.yres, TRANS);
 
 	// paint window
-	paint_box(g_window.x1, g_window.y1, g_window.x2, g_window.y2, BLACK);
-	paint_progressbars();
+	paint_box(g_window.x1, g_window.y1, g_window.x2, g_window.y2, cfg.bg_color);
+	paint_progressbar();
 
-	set_title("Fast Restore in Progress");
+	set_title(cfg.title);
 
 	return 1;
 }

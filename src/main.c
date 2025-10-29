@@ -21,12 +21,12 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
-#include "main.h"
-
+#include <libgen.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/select.h>
+#include "main.h"
 
 #define PIPE_PATH "/tmp/fbprogress_pipe"
 
@@ -39,6 +39,18 @@ int main(int argc, char **argv) {
         perror("open");
         return 1;
     }
+
+    char cfg_path[512];
+    char exe_path[512];
+    ssize_t len = readlink("/proc/self/exe", exe_path, sizeof(exe_path)-1);
+    if (len != -1) {
+        exe_path[len] = '\0';
+        snprintf(cfg_path, sizeof(cfg_path), "%s/fbprogress.cfg", dirname(exe_path));
+    } else {
+        strcpy(cfg_path, "fbprogress.cfg"); // fallback
+    }
+
+    load_config(cfg_path);
 
 	init_framebuffer(2);
 	show_main_window();
