@@ -8,8 +8,8 @@
 #width=800
 #height=200
 
-# Background color (BGRA hex, default: #00000030)
-#bg_color=#00000030
+# Background color (BGRA hex, default: #00000000)
+#bg_color=#00000000
 
 # Progress bar color (BGRA hex, default: #CCCCCCFF)
 #bar_color=#CCCCCCFF

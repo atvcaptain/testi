@@ -109,7 +109,7 @@ void load_config(const char *path) {
 		strcpy(cfg.title, "Fast Restore in Progress");
 		cfg.width = 800;
 		cfg.height = 200;
-		parse_hex_color_bgra("#00000030", cfg.bg_color);
+		parse_hex_color_bgra("#00000000", cfg.bg_color);
 		parse_hex_color_bgra("#CCCCCCFF", cfg.bar_color);
 		parse_hex_color_bgra("#FFFFFFFF", cfg.text_color);	
 		return;
@@ -382,6 +382,14 @@ void render_string(char* str, int x, int y, char* color, int thick)
 		render_char(str[i], x + i * (CHAR_WIDTH + CHAR_WIDTH * thick), y, color, thick);
 }
 
+void remove_substring(char* str, const char* to_remove) {
+    char* pos = strstr(str, to_remove);
+    if (pos != NULL) {
+        int len_to_remove = strlen(to_remove);
+        int len_rest = strlen(pos + len_to_remove);
+        memmove(pos, pos + len_to_remove, len_rest + 1);
+    }
+}
 
 void render_string_wrap(char* str, int x, int y, char* color, int thick, int max_width)
 {
@@ -467,6 +475,12 @@ void set_step_text(char* str) // DONE
 {
 	if (g_fbFd == -1)
 		return;
+
+	remove_substring(str, "enigma2-plugin-extensions-");
+	remove_substring(str, "enigma2-plugin-systemplugins-");
+	remove_substring(str,"https://raw.githubusercontent.com/oe-alliance/");
+	remove_substring(str,"https://feeds2.mynonpublic.com/");
+	remove_substring(str,"/Packages.gz");
 
 	// hide text
 	paint_box(g_window.x1 + 10
